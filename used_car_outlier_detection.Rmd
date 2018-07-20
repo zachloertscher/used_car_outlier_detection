@@ -1,0 +1,410 @@
+---
+title: 'Outlier Detection: Finding the Good Used Car Deals!'
+output:
+  html_document:
+    theme: cerulean
+    code_folding: hide
+    keep_md: TRUE
+editor_options:
+  chunk_output_type: inline
+---
+
+# The Cheap Car Finder
+Imagine this- a friend of yours just reached out to you and asked you for help with a project he's working on.  He has scraped over 2 million rows of data from various used car websites and needs help finding the deals that are worth his money.  You agree to help and decide to do the project in R (if you haven't figured it out yet, this is my situation :)
+
+After thinking and studying about it for a while, you discover that outlier detection may be the simplest and easiest way to work through the problem!
+
+We will discuss later what constitutes a "good deal" later (this is where we'll dig into outlier detection).
+  
+  
+![](C:/Users/zacha/Desktop/car_project_outlier_detection_files/car_lot.jpg)  
+
+##Data Cleanup
+Our client is mostly interested in looking at Ford Deisel trucks with the folowing criteria:  
+
+-the truck was made between the years 1999-2016  
+-the truck has a clean title  
+-it is selling for less than $25k  
+-It has less than 100,000 miles on it (makes sense)
+
+We'll create our outlier detection model with all of these in mind.  For now, we only need to filter a few things.  We'll complete all of our initial cleanup and transformations on the data read to save time!
+
+```{r, message=FALSE, warning=FALSE}
+#Bringing in our libraries
+library(tidyverse)
+library(ggpubr) # For qqplots
+library(data.table) #faster data reading
+library(DT) # For nicer looking tables
+library(kableExtra) #For other nice looking tables
+
+#Bringing in our data
+ford_diesel_trucks <- fread("C:/Users/zacha/Downloads/Cars (1).csv", header=F, showProgress = TRUE) %>%
+  as_data_frame() %>% 
+  
+#Renaming our columns (only including the ones we want)
+  select(car_description = V1
+         , year = V2
+         , make = V3
+         , model = V4
+         , description = V5
+         , mileage = V6
+         , price = V7
+         , transmission = V8
+         , wheel_drive = V10
+         , fuel_type = V11
+         , body_type = V12
+         , color = V13
+         , location = V14
+         , url = V15
+         , website_name = V21
+         , title_condition = V20
+         ) %>%
+  
+#Changing mileage, price, and year columns to integer data type
+    mutate_at(vars(mileage, price, year),
+              funs(as.integer)) %>% 
+  
+#Filtering down the Ford Deisel Trucks with a clean title and some other constraints
+  filter(make == "Ford" 
+        & fuel_type == "Diesel" 
+        & body_type == "Truck"
+        & year <= 2015
+        & year >= 1999
+        & mileage <= 200000
+        & price < 115000
+        & title_condition == "Clean"
+        )
+```
+  
+  Now let's take a peak at our data!
+```{r}
+
+#Writing a simple function for looking at our data in a kable styled table
+kable_table <- function(dataset, number_of_rows){
+  dataset %>%
+  head(number_of_rows) %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+}
+
+#Show a pretty table of our data
+ford_diesel_trucks %>% kable_table(number_of_rows = 5)
+```
+
+  
+  Looks good!  
+
+# Analysis 
+Now it's time to analyze this data!  To detect outliers, or good deals, in this data, we first need to see if our distribution of prices is normal. A "normal" distribution looks like a bellcurve, just like this one:
+<div style="text-align:center" markdown="1">
+![](C:/Users/zacha/Desktop/car_project_outlier_detection_files/normal_distribution.jpg) 
+</div>
+</n>  
+
+## Checking for Normal Distributions {.tabset .tabset-fade}
+Keep in mind that we'll working with two variables: price, and mileage.  These are very good indicators of what a car's price will be, so we'll check these two variables for outliers.
+
+### Price Distribution
+
+```{r, message=FALSE}
+# Plotting the histogram
+ford_diesel_trucks %>% 
+  ggplot(aes(x=price)) +
+      geom_histogram(binwidth = 1000, fill="dodgerblue1", color="black") + 
+      theme_minimal() +
+      labs(x= "Price ($)",
+           y= "Number of Cars") +
+      ggtitle("Ford Diesel Price Distribution")+
+      theme(plot.title = element_text(hjust = 0.5)) #Centers the title
+
+# Plotting the QQ plot
+ggqqplot(ford_diesel_trucks$price, 
+         title = "QQ Plot (If normal, the points will mostly be on the Line")
+```
+
+We can see that our distribution of prices isn't really normally distributed.  
+
+### Mileage Distribution
+
+```{r}
+# Plotting the histogram
+ggplot(data = ford_diesel_trucks, aes(x=mileage)) +
+         geom_histogram(binwidth = 5000, fill="#E69F00", color="black") +
+         labs(x="Mileage",
+              y="# of Cars")+
+         ggtitle("Mileage Distribution with Ford Diesels")+
+         theme(plot.title = element_text(hjust = 0.5))+
+         theme_minimal()
+
+# Plotting the QQ plot
+ggqqplot(ford_diesel_trucks$mileage, title = "QQ Plot (If Normal, the points will mostly be on the line")
+
+```
+
+The mileage distribution looks much better!  
+
+## Looking for Outliers {.tabset .tabset-fade}
+We're on a hunt for the best deals, but it turns out that there are several methods for finding them.  Click one of the tabs below to find out about it!
+
+<div style="text-align:center" markdown="1">
+![](C:/Users/zacha/Desktop/car_project_outlier_detection_files/binoculars-to-sunglasses.gif)
+</div>
+</n>  
+
+### The Tukey Method
+
+Since we're looking for good deals, we'd want to find the cars with REALLY low prices and REALLY low mileage, right?  One way we can visualize these outliers is by using boxplots.  The dots that show up outside of the box plots are considered as outliers, as defined by the Tukey Method.
+
+The Tukey Method is defined as follows:
+
+"The lower and upper hinges correspond to the first and third quartiles (the 25th and 75th percentiles)...
+
+The upper whisker extends from the hinge to the largest value no further than 1.5 \* IQR from the hinge (where IQR is the inter-quartile range, or distance between the first and third quartiles). The lower whisker extends from the hinge to the smallest value at most 1.5 \* IQR of the hinge. *Data beyond the end of the whiskers are called "outlying" points and are plotted individually.They are points that are greater than or less than 1.5 \* the Inter Quartile Range*"
+
+This illustration may help:
+
+<div style="text-align:center" markdown="1">
+![](C:/Users/zacha/Desktop/car_project_outlier_detection_files/boxplot_with_outliers.jpg)
+</div>
+</n>  
+
+
+In other words, when we visualize the mileage and price, do any dots show up on our boxplots?
+
+```{r}
+# Plotting the price boxplot
+ford_diesel_trucks %>% 
+  ggplot(aes(x=1,y=price)) +
+  geom_boxplot(width=.05, fill="dodgerblue1") +
+  theme_minimal() +
+  labs(x= "Density",
+       y= "Price",
+       title = "Ford Diesel Price Distribution") +
+  theme(axis.text.x=element_blank(), #Gets rid of x-axis text
+        axis.ticks.x=element_blank(), #Gets rid of x-axis ticks
+        plot.title = element_text(hjust = 0.5) #Centers the title
+        ) 
+
+# Plotting the mileage boxplot
+ford_diesel_trucks %>% 
+  ggplot(aes(x=1,y=mileage)) +
+    geom_boxplot(width=.05, fill="#E69F00") +
+    theme_minimal() +
+    labs(x= "Density",
+         y= "Mileage",
+         title = "Ford Diesel Mileage Distribution") +
+  theme(axis.text.x=element_blank(), #Gets rid of x-axis text
+        axis.ticks.x=element_blank(), #Gets rid of x-axis ticks
+        plot.title = element_text(hjust = 0.5) #Centers the title
+        ) 
+```
+  
+As you can see in each of these boxplots, we don't have any outliers (at least as defined by the Tukey method).  It is likely that this is because the IQR's (InterQuartile Ranges) for price and mileage is so large!  
+
+Scroll by up to look at a different method!
+
+### Using Standard Deviation
+Instead, let's try using standard deviation to tell us which cars are the best deals.
+
+The formula for standard deviation looks like this:
+$$
+\sigma = \sqrt{\frac{\sum\limits_{i=1}^{n} \left(x_{i} - \bar{x}\right)^{2}} {n-1}}
+$$
+  
+I know, I know- this equation is big and scary!  But basically what it's doing is creating an "average distance from the mean" and putting that into a number, which is called the standard deviation.  
+
+Here's a graphic that might help you understand this concept:
+![](C:/Users/zacha/Desktop/car_project_outlier_detection_files/standard_deviation_curve.jpg)
+
+So we could say that 1 standard deviation is a typical distance from the mean, we could say that 2 standard deviations is pretty dang far from the mean, and 3 is SUPER far from the mean (highly scientific, I know).
+
+By taking the cars that have a high, negative standard deviation, we'll catch the cars that have very low prices and very low mileage.
+
+To do this, we'll need to change our data to include an extra column that will tell us the standard deviation (also known as a z-score in this context) for each car.
+
+```{r}
+ford_diesels_with_outliers <- ford_diesel_trucks %>%
+
+#Creating columns that tell us the standard deviation for price and mileage
+  mutate(sd_price = (price-mean(price))/sd(price),  
+         sd_mileage = (mileage-mean(mileage))/sd(mileage))
+
+#Let's take a peak at these two new columns
+ford_diesels_with_outliers %>% select(sd_price, sd_mileage) %>% kable_table(5)
+```
+Looks good!  Now let's filter our data accordingly.  We'll consider a car as a *good deal* when it is...  
+  
+1. More than .4 standard deviations below the mean price and
+2. More than .8 standard deviations below the mean mileage
+
+(These values were determined by experimentation with different numbers.  They capture a good sample of the best deals.)
+```{r}
+ford_diesel_sd_outliers <- ford_diesels_with_outliers %>% 
+  filter(price < mean(price) 
+         & mileage < mean(mileage)) %>%
+  filter(sd_price < -.4 #Here's our standard deviation boundary for price
+         & sd_mileage < -.8 #Here's our standard deviation boundary for mileage
+         )
+```
+
+Alright- let's find out just how many trucks we got.
+```{r}
+print(paste("We captured", nrow(ford_diesel_sd_outliers), "outliers")
+      , quote = FALSE)
+```
+
+Great!  Much better than the original histogram method.  Now let's take a look at a couple of histograms of our new prices and mileage!
+
+```{r}
+par(mfrow=c(1,2)) # For plotting two plots next to each other
+hist(ford_diesel_sd_outliers$price,
+     main = "Outlier Prices Distribution",
+     col="dodgerblue1",
+     xlab = "Price")
+hist(ford_diesel_sd_outliers$mileage, 
+     main = "Outlier Mileage Distribution", 
+     col="#E69F00",
+     xlab = "Mileage")
+```
+
+Great!  So we got 47 cars that are...  
+
+1. between approximately 70k and 110k in mileage  
+2. between approximately \$18k and \$26k
+
+Let's visualize this data in context of all the cars and see what we find out!
+
+```{r}
+mileage_boundary_sd <- max(ford_diesel_sd_outliers$mileage)
+price_boundary_sd <- max(ford_diesel_sd_outliers$price)
+
+#Plotting the mileage and price outliers in the context of all our data
+
+ggplot() +
+  
+  #First plotting the red outliers
+  geom_point(data=ford_diesel_sd_outliers, aes(x=mileage, y=price), 
+             size=3,
+             color="#55C667FF") +
+  
+  #Plotting the rest of the data
+  geom_point(data=ford_diesel_trucks, aes(x=mileage, y=price)) + 
+  
+  #Plot the price boundary we set as a line
+  geom_segment(data=ford_diesel_trucks, 
+               aes(x=0, xend=mileage_boundary_sd, y=price_boundary_sd, yend=price_boundary_sd), 
+               color="black", size=1.25) +
+
+  #Plot the mileage boundary we set as a line
+  geom_segment(data=ford_diesel_trucks, 
+               aes(x=mileage_boundary_sd, xend=mileage_boundary_sd, y=0, yend=price_boundary_sd), 
+               color="black", size=1.25) +
+  
+  theme_classic() +
+  
+  labs(x="Mileage", 
+       y="Price",
+       title="Ford Diesel Trucks: Outliers Are Circled in Green")
+  
+```
+  
+This looks like it's doing a pretty good job!  As you can see, the boundaries look very hard set.  I'd say that this method worked quite well!
+
+If you want to peruse these vehicles and see if there are any common themes, check out the table below.  I've noticed that they are usually very large vehicles like F-250's and F-350's.  Perhaps these are priced lower because larger vehicles depreciate more quickly?
+
+```{r}
+datatable(ford_diesel_sd_outliers)
+```
+
+### Manually Catching Outliers
+
+<div style="text-align:center" markdown="1">
+![](C:/Users/zacha/Desktop/car_project_outlier_detection_files/custom_outlier_detection.png)
+</div>
+</n> 
+Let's say you want to take outlier detection into your own hands.  Okay! We can do that!  We'll use percentiles.  
+
+Below is a quick explanation of what percentiles are:
+
+<div style="text-align:center" markdown="1">
+![](C:/Users/zacha/Desktop/car_project_outlier_detection_files/percentiles.jpg)
+</div>
+</n> 
+
+
+After some experimentation, I found that the following rule worked quite well:  
+
+*Only keep cars within the bottom 40th percentile for price AND within the bottom 35th percentile for mileage.*
+
+By doing this, we will get cars that have both low mileage AND a low price!  What's also nifty is that this method can be applied to any car type, and not matter what the distribution looks like, we'll still capture the best deals.
+
+```{r}
+#Filtering the data to include the bottom 40% of price AND bottom 35% of mileage
+good_deals <- ford_diesel_trucks %>%
+  filter(price < quantile(price, .4) &
+         mileage < quantile(mileage, .35)
+         ) %>%
+        arrange(price)
+```
+
+```{r}
+#Setting boundaries for our price and mileage again
+price_boundary <- quantile(ford_diesel_trucks$price, .4)[[1]]
+mileage_boundary <- quantile(ford_diesel_trucks$mileage, .35)[[1]]
+
+ggplot() +
+  #Plotting the outliers as green dots
+  geom_point(data=good_deals, aes(x=mileage, y=price), size=3, color="#55C667FF") +
+  
+  #Plotting the rest of the trucks
+  geom_point(data=ford_diesel_trucks, aes(x=mileage, y=price)) +
+  
+  #Plotting the price boundary line we set
+  geom_segment(data=ford_diesel_trucks, 
+               aes(x=0, xend=mileage_boundary, y=price_boundary, yend=price_boundary), 
+               color="black", size=1.25, linestyle = "dashed") +
+
+  #Plotting the price boundary line we set
+  geom_segment(data=ford_diesel_trucks, 
+               aes(x=mileage_boundary, xend=mileage_boundary, y=0, yend=price_boundary), 
+               color="black", size=1.25, linestyle = "dashed") +
+  theme_classic() +
+  ggtitle("Outlier Detection Using Manually Set Boundaries") +
+  labs(x="Mileage", y="Price") 
+```
+As you can see, this method was a bit more forgiving with the mileage.  Once again, we customized the fit of detecting these outliers, so you can make it work for whatever data you want.
+
+```{r, message=FALSE, warning=FALSE}
+#Interactive table for looking at the good deals
+datatable(good_deals, options=list(lengthMenu = c(3,10,30)))
+```
+
+It looks like there are very few cars that are selling for this low a price under 50,000 miles, but we've captured some pretty low-mileage low-price cars! 
+
+## In Conclusion
+
+In the end, Jared didn't need any of these solutions.  He was already implimenting something very similar to it!
+
+But I then learned about how much time he wastes sifting through fake car postings his model sends him.  
+
+I now have a new project to work on :)
+
+But what's the lesson here?  
+
+Put a lot of effort into communicating with your clients to find out what their real concerns are.  Then build off of what has already been accomplished! By doing this, you will avoid wasting time reinventing what's already been done and truly deliver on what your clients need :)
+
+Also, we learned about outlier detection- yay!
+
+
+
+## In Conclusion
+
+In the end, Jared didn't need any of these solutions.  He was already implimenting something very similar to it!
+
+But I then learned about how much time he wastes sifting through fake car postings his model sends him.  
+
+I now have a new project to work on :)
+
+But what's the lesson here?  
+
+Put a lot of effort into communicating with your clients to find out what their real concerns are.  Then build off of what has already been accomplished! By doing this, you will avoid wasting time reinventing what's already been done and truly deliver on what your clients need :)
